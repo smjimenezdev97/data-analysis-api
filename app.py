@@ -129,6 +129,79 @@ def analyze_data():
 
     return jsonify(result), 200
 
+@app.route('/stats/score', methods=['POST'])
+def score_dataset():
+    """Evalúa la calidad de un dataset con un sistema de scoring."""
+    if not request.is_json:
+        return jsonify({"error": "El Content-Type debe ser application/json"}), 400
 
+    body = request.get_json()
+
+    if 'data' not in body:
+        return jsonify({"error": "El campo 'data' es requerido"}), 400
+
+    data = body['data']
+
+    if not isinstance(data, list) or len(data) < 2:
+        return jsonify({"error": "Se necesita una lista con al menos 2 números"}), 400
+
+    if not all(isinstance(x, (int, float)) for x in data):
+        return jsonify({"error": "Todos los elementos deben ser números"}), 400
+
+    arr = np.array(data, dtype=float)
+    score = 100
+
+    # Penalizar por muestra pequeña
+    if len(arr) < 10:
+        score -= 20
+    elif len(arr) < 30:
+        score -= 10
+
+    # Penalizar por alta dispersión (coeficiente de variación)
+    mean = np.mean(arr)
+    if mean != 0:
+        cv = (np.std(arr, ddof=1) / abs(mean)) * 100
+        if cv > 100:
+            score -= 30
+        elif cv > 50:
+            score -= 15
+
+    # Penalizar por outliers
+    q1 = np.percentile(arr, 25)
+    q3 = np.percentile(arr, 75)
+    iqr = q3 - q1
+    outliers = arr[(arr < q1 - 1.5 * iqr) | (arr > q3 + 1.5 * iqr)]
+    outlier_pct = len(outliers) / len(arr) * 100
+    if outlier_pct > 10:
+        score -= 20
+    elif outlier_pct > 0:
+        score -= 10
+
+    score = max(score, 0)
+
+    if score >= 80:
+        quality = "Excelente"
+    elif score >= 60:
+        quality = "Bueno"
+    elif score >= 40:
+        quality = "Regular"
+    else:
+        quality = "Deficiente"
+
+    logger.info(f"POST /stats/score - Score: {score}/100")
+
+    return jsonify({
+        "score": score,
+        "quality": quality,
+        "details": {
+            "sample_size": len(arr),
+            "coefficient_of_variation": round(float(cv), 2) if mean != 0 else None,
+            "outlier_percentage": round(outlier_pct, 2),
+            "outliers_count": len(outliers)
+        },
+        "timestamp": datetime.now().isoformat()
+    }), 200
+    
+    
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
